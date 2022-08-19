@@ -22,7 +22,7 @@ services:
       <<: *commonvars
     volumes:
       - ./:/src
-    command: bash -c "cd /src && echo RUN SOCKETIO server"
+    command: bash -c "cd /src && . /venv/bin/activate && python3 -u signaling_server.py"
 
   peer1:
     image: "gstreamer-python:latest"
@@ -35,7 +35,7 @@ services:
       WEBRTC_TURN_SERVER: turn://turnserver:3478?transport=udp
     volumes:
       - ./:/src
-    command: bash -c "cd /src && echo RUN PEER1"
+    command: bash -c "cd /src && . /venv/bin/activate && python3 -u webrtc_sendrecv.py --server ws://signaling:8443 --audiooutputsink fakesink --videooutputsink fakesink 3"
 
   peer2:
     image: "gstreamer-python:latest"
@@ -48,4 +48,4 @@ services:
       WEBRTC_TURN_SERVER: turn://turnserver:3478?transport=udp
     volumes:
       - ./:/src
-    command: bash -c "cd /src && echo RUN PEER2"
+    command: bash -c "cd /src && . /venv/bin/activate && python3 -u webrtc_sendrecv.py --server ws://signaling:8443 --audiooutputsink fakesink --videooutputsink fakesink 3"

@@ -15,18 +15,10 @@ from gi.repository import GstWebRTC
 gi.require_version('GstSdp', '1.0')
 from gi.repository import GstSdp
 
-PIPELINE_DESC = '''
-webrtcbin name=sendrecv bundle-policy=max-bundle stun-server=stun://stun.l.google.com:19302
- videotestsrc is-live=true pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay !
- queue ! application/x-rtp,media=video,encoding-name=VP8,payload=97 ! sendrecv.
- audiotestsrc is-live=true wave=red-noise ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay !
- queue ! application/x-rtp,media=audio,encoding-name=OPUS,payload=96 ! sendrecv.
-'''
-
 from websockets.version import version as wsv
 
 class WebRTCClient:
-    def __init__(self, id_, peer_id, server, video_output_sink, audio_output_sink):
+    def __init__(self, id_, peer_id, server, video_output_sink, audio_output_sink, stun, turn):
         self.id_ = id_
         self.conn = None
         self.pipe = None
@@ -37,6 +29,19 @@ class WebRTCClient:
         self.audio_output_sink = audio_output_sink
         print (f"Using video_output_sink: {self.video_output_sink}")
         print (f"Using audio_output_sink: {self.audio_output_sink}")
+
+        stun_parameter = f"stun-server={stun}" if stun is not None else "" 
+        turn_parameter = f"turn-server={turn}" if turn is not None else ""
+
+        self.PIPELINE_DESC = f'''        
+            webrtcbin name=sendrecv bundle-policy=max-bundle {stun_parameter} {turn_parameter}
+                videotestsrc is-live=true pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay !
+                    queue ! application/x-rtp,media=video,encoding-name=VP8,payload=97 ! sendrecv.
+                audiotestsrc is-live=true wave=red-noise ! audioconvert ! audioresample ! queue ! opusenc ! rtpopuspay !
+                    queue ! application/x-rtp,media=audio,encoding-name=OPUS,payload=96 ! sendrecv.
+        '''
+
+        print(f"Created pipeline description: {self.PIPELINE_DESC}")
 
     async def connect(self):
         # removed SSL requirement
@@ -142,7 +147,7 @@ class WebRTCClient:
 
     def start_pipeline(self, mode):
         print (f"Starting pipeline in mode: {mode}")
-        self.pipe = Gst.parse_launch(PIPELINE_DESC)
+        self.pipe = Gst.parse_launch(self.PIPELINE_DESC)
         self.webrtc = self.pipe.get_by_name('sendrecv')
 
         self.webrtc.connect('notify::ice-gathering-state', self.on_ice_gathering_state_notify)
@@ -253,9 +258,11 @@ if __name__=='__main__':
     parser.add_argument('--server', help='Signalling server (running signaling_server.py) to connect to, eg "ws://127.0.0.1:8443"')
     parser.add_argument('--videooutputsink', help='Sink element that is used to output video stream', default='autovideosink')
     parser.add_argument('--audiooutputsink', help='Sink element that is used to output audio stream', default='autoaudiosink')
+    parser.add_argument('--stun', help='stun-server parameter for webrtcbin e.g. stun://turnserver:3478')
+    parser.add_argument('--turn', help='turn-server parameter for webrtcbin e.g. turn://<user>:<pass>@turnserver:3478?transport=udp')
     args = parser.parse_args()
     our_id = random.randrange(10, 10000)
-    c = WebRTCClient(our_id, args.peerid, args.server, args.videooutputsink, args.audiooutputsink)
+    c = WebRTCClient(our_id, args.peerid, args.server, args.videooutputsink, args.audiooutputsink, args.stun, args.turn)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(c.connect())
     res = loop.run_until_complete(c.loop())
