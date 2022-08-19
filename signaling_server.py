@@ -137,7 +137,7 @@ async def handler(websocket, path):
  
     finally:
         # NOTE: this way of initializing / cleaning up session has race conditions where it will fail
-        print (f"Peer did disconnected. Clearing up session {sessionid}")
+        print (f"Peer did disconnected. Cleaning up session {sessionid}")
         try:
             del sessions[sessionid]
         except:

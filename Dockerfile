@@ -74,3 +74,4 @@ libflac8 libsrtp2-1 gobject-introspection libgtk-3-dev libgraphene-1.0-dev netba
 alsa-utils libgvc6 \
 && rm -rf /var/lib/apt/lists/*
 
+RUN . /venv/bin/activate && pip3 install websockets

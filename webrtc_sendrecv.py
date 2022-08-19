@@ -26,13 +26,17 @@ webrtcbin name=sendrecv bundle-policy=max-bundle stun-server=stun://stun.l.googl
 from websockets.version import version as wsv
 
 class WebRTCClient:
-    def __init__(self, id_, peer_id, server):
+    def __init__(self, id_, peer_id, server, video_output_sink, audio_output_sink):
         self.id_ = id_
         self.conn = None
         self.pipe = None
         self.webrtc = None
         self.peer_id = peer_id
-        self.server = server or 'wss://webrtc.nirbheek.in:8443'
+        self.server = server
+        self.video_output_sink = video_output_sink
+        self.audio_output_sink = audio_output_sink
+        print (f"Using video_output_sink: {self.video_output_sink}")
+        print (f"Using audio_output_sink: {self.audio_output_sink}")
 
     async def connect(self):
         # removed SSL requirement
@@ -85,24 +89,33 @@ class WebRTCClient:
             return
 
         caps = pad.get_current_caps()
-        assert (len(caps))
-        s = caps[0]
+        print(f"Got caps {caps.to_string()}")
+        s = caps.get_structure(0)
         name = s.get_name()
+
         if name.startswith('video'):
+            print ("== creating backend for video")
             q = Gst.ElementFactory.make('queue')
             conv = Gst.ElementFactory.make('videoconvert')
-            sink = Gst.ElementFactory.make('autovideosink')
-            self.pipe.add(q, conv, sink)
+            sink = Gst.ElementFactory.make(self.video_output_sink)
+            self.pipe.add(q)
+            self.pipe.add(conv)
+            self.pipe.add(sink)
             self.pipe.sync_children_states()
             pad.link(q.get_static_pad('sink'))
             q.link(conv)
             conv.link(sink)
+
         elif name.startswith('audio'):
+            print ("== creating backend for audio")
             q = Gst.ElementFactory.make('queue')
             conv = Gst.ElementFactory.make('audioconvert')
             resample = Gst.ElementFactory.make('audioresample')
-            sink = Gst.ElementFactory.make('autoaudiosink')
-            self.pipe.add(q, conv, resample, sink)
+            sink = Gst.ElementFactory.make(self.audio_output_sink)
+            self.pipe.add(q)
+            self.pipe.add(conv)
+            self.pipe.add(resample)
+            self.pipe.add(sink)
             self.pipe.sync_children_states()
             pad.link(q.get_static_pad('sink'))
             q.link(conv)
@@ -112,17 +125,28 @@ class WebRTCClient:
     def on_incoming_stream(self, _, pad):
         if pad.direction != Gst.PadDirection.SRC:
             return
-
+        print ("== GOT incoming stream, connecting decodebin")
         decodebin = Gst.ElementFactory.make('decodebin')
         decodebin.connect('pad-added', self.on_incoming_decodebin_stream)
         self.pipe.add(decodebin)
         decodebin.sync_state_with_parent()
         self.webrtc.link(decodebin)
 
+    def on_ice_gathering_state_notify(self, pspec, _):
+        state = self.webrtc.get_property('ice-gathering-state')
+        print(f'ICE gathering state changed to {state}')
+
+    def on_ice_connection_state_notify(self, pspec, _):
+        state = self.webrtc.get_property('ice-connection-state')
+        print(f'ICE connection state changed to {state}')
+
     def start_pipeline(self, mode):
         print (f"Starting pipeline in mode: {mode}")
         self.pipe = Gst.parse_launch(PIPELINE_DESC)
         self.webrtc = self.pipe.get_by_name('sendrecv')
+
+        self.webrtc.connect('notify::ice-gathering-state', self.on_ice_gathering_state_notify)
+        self.webrtc.connect('notify::ice-connection-state', self.on_ice_connection_state_notify)
 
         # this is needed only when creating SDP offer        
         if mode == 'SESSION_SERVER': self.webrtc.connect('on-negotiation-needed', self.on_negotiation_needed)
@@ -131,7 +155,7 @@ class WebRTCClient:
         self.webrtc.connect('pad-added', self.on_incoming_stream)
         self.pipe.set_state(Gst.State.PLAYING)
 
-    def handle_sdp(self, message):
+    def handle_sdp_and_ice(self, message):
         assert (self.webrtc)
         msg = json.loads(message)
         if 'sdp' in msg:
@@ -161,13 +185,14 @@ class WebRTCClient:
             ice = msg['ice']
             candidate = ice['candidate']
             sdpmlineindex = ice['sdpMLineIndex']
+            print(f"Adding candidate to webrtcbin sdplineindex: {sdpmlineindex} {candidate}")
             self.webrtc.emit('add-ice-candidate', sdpmlineindex, candidate)
 
     def create_sdp_answer(self):
-        promise = Gst.Promise.new_with_change_func(self.cb_answer_created, self.webrtc, None)
+        promise = Gst.Promise.new_with_change_func(self.on_answer_created, self.webrtc, None)
         self.webrtc.emit('create-answer', None, promise)
 
-    def cb_answer_created(self, promise, _, __):
+    def on_answer_created(self, promise, _, __):
         promise.wait()
         reply = promise.get_reply()
         error = reply.get_value('error')
@@ -198,8 +223,8 @@ class WebRTCClient:
                 print (message)
                 self.close_pipeline()
                 return 1
-            elif message.startswith('{"sdp": '):
-                self.handle_sdp(message)
+            elif message.startswith('{"sdp": ') or message.startswith('{"ice": '):
+                self.handle_sdp_and_ice(message)
         self.close_pipeline()
         return 0
 
@@ -226,9 +251,11 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('peerid', help='Session ID which to connect')
     parser.add_argument('--server', help='Signalling server (running signaling_server.py) to connect to, eg "ws://127.0.0.1:8443"')
+    parser.add_argument('--videooutputsink', help='Sink element that is used to output video stream', default='autovideosink')
+    parser.add_argument('--audiooutputsink', help='Sink element that is used to output audio stream', default='autoaudiosink')
     args = parser.parse_args()
     our_id = random.randrange(10, 10000)
-    c = WebRTCClient(our_id, args.peerid, args.server)
+    c = WebRTCClient(our_id, args.peerid, args.server, args.videooutputsink, args.audiooutputsink)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(c.connect())
     res = loop.run_until_complete(c.loop())
