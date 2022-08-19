@@ -224,8 +224,8 @@ if __name__=='__main__':
     if not check_plugins():
         sys.exit(1)
     parser = argparse.ArgumentParser()
-    parser.add_argument('peerid', help='String ID of the peer to connect to')
-    parser.add_argument('--server', help='Signalling server to connect to, eg "wss://127.0.0.1:8443"')
+    parser.add_argument('peerid', help='Session ID which to connect')
+    parser.add_argument('--server', help='Signalling server (running signaling_server.py) to connect to, eg "ws://127.0.0.1:8443"')
     args = parser.parse_args()
     our_id = random.randrange(10, 10000)
     c = WebRTCClient(our_id, args.peerid, args.server)

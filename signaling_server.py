@@ -17,6 +17,20 @@ class WebRTCSession:
         self.sdp_answer = None
         self.state = "INIT"
 
+    async def close(self):
+        try:
+            await self.server.close()
+        except:
+            pass
+        
+        try:
+            await self.client.close()
+        except:
+            pass
+
+        self.state = "SESSION_CLOSED"
+
+
     def add_peer(self, peerid, websocket):
         if self.server is None:
             self.server = websocket
@@ -80,37 +94,55 @@ async def handler(websocket, path):
     sessionid = None
     session = None
 
-    async for data in websocket:
-        print(f"Got message: {data}")
-        reply = "ok"
+    try:
+        async for data in websocket:
+            print(f"Got message: {data}")
+            reply = "ok"
 
-        if data.startswith("HELLO"):
-            reply = "HELLO"
-            peerid = data[6:]
+            if data.startswith("HELLO"):
+                reply = "HELLO"
+                peerid = data[6:]
 
-        if data.startswith("SESSION"):
-            sessionid = data[8:]
-            session = sessions.get(sessionid, WebRTCSession())
-            sessions[sessionid] = session
-            reply = session.add_peer(peerid, websocket)
+            if data.startswith("SESSION"):
+                sessionid = data[8:]
+                session = sessions.get(sessionid, WebRTCSession())
+                sessions[sessionid] = session
+                try:
+                    reply = session.add_peer(peerid, websocket)
+                except:
+                    # exit websocket communication handler loop without destroying the session for other 2 peers
+                    sessionid = None
+                    session = None
+                    websocket.close()
+                    break
 
-        if data == "PIPELINE_READY":
-            session.ready_for_sdp(websocket)
+            if data == "PIPELINE_READY":
+                session.ready_for_sdp(websocket)
 
-        if data.startswith('{"sdp": {"type": "offer"'):
-            session.set_offer(websocket, data)
+            if data.startswith('{"sdp": {"type": "offer"'):
+                session.set_offer(websocket, data)
 
-        if data.startswith('{"sdp": {"type": "answer"'):
-            session.set_answer(websocket, data)
+            if data.startswith('{"sdp": {"type": "answer"'):
+                session.set_answer(websocket, data)
 
-        if data.startswith('{"ice": {"'):
-            reply = f"{session.role(websocket)} sent ICE"
-            session.pass_ice(websocket, data)
+            if data.startswith('{"ice": {"'):
+                reply = f"{session.role(websocket)} sent ICE"
+                session.pass_ice(websocket, data)
 
-        if session: await session.run_state_machine()
-        await websocket.send(reply)
+            if session: await session.run_state_machine()
+            await websocket.send(reply)
 
-    print ("Peer did disconnect TODO: cleanup session if necessary")
+    except Exception as err:
+        print (err)
+ 
+    finally:
+        # NOTE: this way of initializing / cleaning up session has race conditions where it will fail
+        print (f"Peer did disconnected. Clearing up session {sessionid}")
+        try:
+            del sessions[sessionid]
+        except:
+            pass
+        await session.close()
     
 start_server = websockets.serve(handler, "localhost", 8443)
  
