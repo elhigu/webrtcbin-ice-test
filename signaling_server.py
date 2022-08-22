@@ -1,9 +1,20 @@
 import asyncio
 import websockets
+from enum import Enum
 
-# sessions where 2 peers try to talk together
 peers = {}
 sessions = {}
+
+class SessionState(Enum):
+    INIT = "INIT"
+    WAITING_FOR_SDP_OFFER = "WAITING_FOR_SDP_OFFER"
+    WAITING_FOR_SDP_ANSWER = "WAITING_FOR_SDP_ANSWER"
+    SDP_NEGOTIATION_READY = "SDP_NEGOTIATION_READY"
+    SESSION_CLOSED = "SESSION_CLOSED"
+
+class SessionType(Enum):
+    SESSION_CLIENT = "SESSION_CLIENT"
+    SESSION_SERVER = "SESSION_SERVER"
 
 class WebRTCSession:
     def __init__(self):
@@ -15,7 +26,7 @@ class WebRTCSession:
         self.client_ice = []
         self.sdp_offer = None
         self.sdp_answer = None
-        self.state = "INIT"
+        self.state = SessionState.INIT
 
     async def close(self):
         try:
@@ -28,17 +39,17 @@ class WebRTCSession:
         except:
             pass
 
-        self.state = "SESSION_CLOSED"
+        self.state = SessionState.SESSION_CLOSED
 
 
     def add_peer(self, peerid, websocket):
         if self.server is None:
             self.server = websocket
-            return "SESSION_SERVER"
+            return SessionType.SESSION_SERVER.value
 
         if self.client is None:
             self.client = websocket
-            return "SESSION_CLIENT"
+            return SessionType.SESSION_CLIENT.value            
 
         raise Exception("Too many peers")
 
@@ -61,7 +72,7 @@ class WebRTCSession:
             self.client_ready_for_sdp = True
 
     def role(self, websocket):
-        return "SERVER" if websocket is self.server else "CLIENT"
+        return SessionType.SESSION_SERVER if websocket is self.server else SessionType.SESSION_CLIENT
     
     def pass_ice(self, websocket, ice):
         if websocket is self.server:
@@ -69,19 +80,26 @@ class WebRTCSession:
         if websocket is self.client:
             self.client_ice.append(ice)
 
+    def setState(self, newState):
+        if newState == SessionState.WAITING_FOR_SDP_OFFER: assert(self.state == SessionState.INIT)
+        if newState == SessionState.WAITING_FOR_SDP_ANSWER: assert(self.state == SessionState.WAITING_FOR_SDP_OFFER)
+        if newState == SessionState.SDP_NEGOTIATION_READY: assert(self.state == SessionState.WAITING_FOR_SDP_ANSWER)        
+        print (f"Session state changed to {newState}")
+        self.state = newState
+
     async def run_state_machine(self):
-        if self.state == "INIT" and self.server_ready_for_sdp and self.client_ready_for_sdp:
-            self.state = "WAITING_FOR_SDP_OFFER"
+        if self.state == SessionState.INIT and self.server_ready_for_sdp and self.client_ready_for_sdp:
+            self.setState(SessionState.WAITING_FOR_SDP_OFFER)
         
-        if self.state == "WAITING_FOR_SDP_OFFER" and self.sdp_offer:
+        if self.state == SessionState.WAITING_FOR_SDP_OFFER and self.sdp_offer:
             await self.client.send(self.sdp_offer)
-            self.state = "WAITING_FOR_SDP_ANSWER"
+            self.setState(SessionState.WAITING_FOR_SDP_ANSWER)
 
-        if self.state == "WAITING_FOR_SDP_ANSWER" and self.sdp_answer:
+        if self.state == SessionState.WAITING_FOR_SDP_ANSWER and self.sdp_answer:
             await self.server.send(self.sdp_answer)
-            self.state = "SDP_NEGOTIATION_READY"
-
-        if self.state == "SDP_NEGOTIATION_READY":
+            self.setState(SessionState.SDP_NEGOTIATION_READY)
+            
+        if self.state == SessionState.SDP_NEGOTIATION_READY:
             while len(self.server_ice) > 0:
                 await self.client.send(self.server_ice.pop(0))
             while len(self.client_ice) > 0:
@@ -119,14 +137,15 @@ async def handler(websocket, path):
             if data == "PIPELINE_READY":
                 session.ready_for_sdp(websocket)
 
-            if data.startswith('{"sdp": {"type": "offer"'):
+            # maybe I just should try to parse the message from json... but meh, good enough
+            if data.replace(" ", "").startswith('{"sdp":{"type":"offer"'):
                 session.set_offer(websocket, data)
 
-            if data.startswith('{"sdp": {"type": "answer"'):
+            if data.replace(" ", "").startswith('{"sdp":{"type":"answer"'):
                 session.set_answer(websocket, data)
 
-            if data.startswith('{"ice": {"'):
-                reply = f"{session.role(websocket)} sent ICE"
+            if data.replace(" ", "").startswith('{"ice":{"'):
+                reply = f"{session.role(websocket)} sent ICE to other peer\n{data}"
                 session.pass_ice(websocket, data)
 
             if session: await session.run_state_machine()
@@ -142,7 +161,7 @@ async def handler(websocket, path):
             del sessions[sessionid]
         except:
             pass
-        await session.close()
+        if session: await session.close()
     
 start_server = websockets.serve(handler, "0.0.0.0", 8443)
  

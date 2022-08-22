@@ -30,9 +30,9 @@ class WebRTCClient:
         print (f"Using video_output_sink: {self.video_output_sink}")
         print (f"Using audio_output_sink: {self.audio_output_sink}")
 
-        stun_parameter = f"stun-server={stun}" if stun is not None else "" 
-        turn_parameter = f"turn-server={turn}" if turn is not None else ""
-
+        stun_parameter = f"stun-server={stun}" if len(stun) > 0 else "" 
+        turn_parameter = f"turn-server={turn}" if len(turn) > 0 else ""
+ 
         self.PIPELINE_DESC = f'''        
             webrtcbin name=sendrecv bundle-policy=max-bundle {stun_parameter} {turn_parameter}
                 videotestsrc is-live=true pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay !
@@ -228,7 +228,7 @@ class WebRTCClient:
                 print (message)
                 self.close_pipeline()
                 return 1
-            elif message.startswith('{"sdp": ') or message.startswith('{"ice": '):
+            elif message.replace(" ", "").startswith('{"sdp":') or message.replace(" ", "").startswith('{"ice":'):
                 self.handle_sdp_and_ice(message)
         self.close_pipeline()
         return 0
@@ -258,8 +258,8 @@ if __name__=='__main__':
     parser.add_argument('--server', help='Signalling server (running signaling_server.py) to connect to, eg "ws://127.0.0.1:8443"')
     parser.add_argument('--videooutputsink', help='Sink element that is used to output video stream', default='autovideosink')
     parser.add_argument('--audiooutputsink', help='Sink element that is used to output audio stream', default='autoaudiosink')
-    parser.add_argument('--stun', help='stun-server parameter for webrtcbin e.g. stun://turnserver:3478')
-    parser.add_argument('--turn', help='turn-server parameter for webrtcbin e.g. turn://<user>:<pass>@turnserver:3478?transport=udp')
+    parser.add_argument('--stun', help='stun-server parameter for webrtcbin e.g. stun://turnserver:3478', default="")
+    parser.add_argument('--turn', help='turn-server parameter for webrtcbin e.g. turn://<user>:<pass>@turnserver:3478?transport=udp', default="")
     args = parser.parse_args()
     our_id = random.randrange(10, 10000)
     c = WebRTCClient(our_id, args.peerid, args.server, args.videooutputsink, args.audiooutputsink, args.stun, args.turn)

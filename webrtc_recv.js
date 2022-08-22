@@ -5,29 +5,56 @@
  * with answers, exchanges ICE candidates, and streams.
  *
  * Author: Nirbheek Chauhan <nirbheek@centricular.com>
+ * 
+ * Modified from:
+ * https://github.com/lukasmahr/gstreamer-webrtcbin-example/blob/master/web-client/scripts/webrtc.js
  */
 
 // Set this to override the automatic detection in websocketServerConnect()
 var ws_server;
 var ws_port;
 // Set this to use a specific peer id instead of a random one
-var default_peer_id = 1;
+var default_peer_id;
+
 // Override with your own STUN servers if you want
-//var rtc_configuration = {iceServers: [{urls: "stun:stun.services.mozilla.com"},
-//                                      {urls: "stun:stun.l.google.com:19302"}]};
-var rtc_configuration = {iceServers: [{urls: "stun:10.14.154.15"}]};
-//    {urls: "stun:10.14.50.235:3478"}]};
+// var rtc_configuration = {iceServers: [{urls: "stun:172.19.221.117:3478"}]};
+var rtc_configuration = {}; // {iceServers: [{urls: "stun:stun.l.google.com:19302"}]};
+
 // The default constraints that will be attempted. Can be overriden by the user.
-var default_constraints = {video: true, audio: false};
+var default_constraints = {video: true, audio: true};
 
 var connect_attempts = 0;
 var peer_connection;
 var send_channel;
 var ws_conn;
+
 // Promise for local stream after constraints are approved by the user
 var local_stream_promise;
 
-var statsTimer;
+function setConnectButtonState(value) {
+    document.getElementById("peer-connect-button").value = value;
+}
+
+var is_client = true;
+function wantRemoteOfferer() {
+   return is_client;
+}
+
+function onConnectClicked() {
+    if (document.getElementById("peer-connect-button").value == "Disconnect") {
+        resetState();
+        return;
+    }
+
+    var id = document.getElementById("peer-connect").value;
+    if (id == "") {
+        alert("Peer id must be filled out");
+        return;
+    }
+
+    ws_conn.send("SESSION " + id);
+    setConnectButtonState("Disconnect");
+}
 
 function getOurId() {
     return Math.floor(Math.random() * (9000 - 10) + 10).toString();
@@ -85,15 +112,11 @@ function onIncomingSDP(sdp) {
         if (sdp.type != "offer")
             return;
         setStatus("Got SDP offer");
-        if (local_stream_promise) {
-            local_stream_promise.then((stream) => {
-                setStatus("Got local stream, creating answer");
-                peer_connection.createAnswer()
-                .then(onLocalDescription).catch(setError);
-            }).catch(setError);
-        } else {
-            peer_connection.createAnswer().then(onLocalDescription).catch(setError);
-        }
+        local_stream_promise.then((stream) => {
+            setStatus("Got local stream, creating answer");
+            peer_connection.createAnswer()
+            .then(onLocalDescription).catch(setError);
+        }).catch(setError);
     }).catch(setError);
 }
 
@@ -101,10 +124,14 @@ function onIncomingSDP(sdp) {
 function onLocalDescription(desc) {
     console.log("Got local description: " + JSON.stringify(desc));
     peer_connection.setLocalDescription(desc).then(function() {
-        setStatus("Sending SDP answer");
+        setStatus("Sending SDP " + desc.type);
         sdp = {'sdp': peer_connection.localDescription}
         ws_conn.send(JSON.stringify(sdp));
     });
+}
+
+function generateOffer() {
+    peer_connection.createOffer().then(onLocalDescription).catch(setError);
 }
 
 // ICE candidate received from peer, add it to the peer connection
@@ -119,15 +146,34 @@ function onServerMessage(event) {
         case "HELLO":
             setStatus("Registered with server, waiting for call");
             return;
+        case "SESSION_CLIENT":
+            is_client = true;
+            setStatus("Starting negotiation");
+            if (wantRemoteOfferer()) {
+                ws_conn.send("PIPELINE_READY");
+                setStatus("Sent PIPELINE_READY, waiting for offer");
+                return;
+            }
+            if (!peer_connection)
+                createCall(null).then (generateOffer);
+            return;
+        case "SESSION_SERVER":
+            is_client = false;
+            setStatus("Starting negotiation");
+            ws_conn.send("PIPELINE_READY");
+            if (!peer_connection)
+                createCall(null).then (generateOffer);
+            return;
         default:
             if (event.data.startsWith("ERROR")) {
                 handleIncomingError(event.data);
                 return;
             }
             // Handle incoming JSON SDP and ICE messages
+            if (event.data == "ok" || event.data.startsWith("SessionType.SESSION_CLIENT")) return;
             try {
                 msg = JSON.parse(event.data);
-            } catch (e) {
+            } catch (e) {            
                 if (e instanceof SyntaxError) {
                     handleIncomingError("Error parsing incoming JSON: " + event.data);
                 } else {
@@ -155,7 +201,6 @@ function onServerClose(event) {
     resetVideo();
 
     if (peer_connection) {
-        clearTimeout(statsTimer);
         peer_connection.close();
         peer_connection = null;
     }
@@ -214,9 +259,7 @@ function websocketServerConnect() {
     } else {
         throw new Error ("Don't know how to connect to the signalling server with uri" + window.location);
     }
-
-    ws_server = '127.0.0.1';
-    var ws_url = 'ws://' + ws_server + ':' + ws_port;
+    var ws_url = 'ws://' + ws_server + ':' + ws_port
     setStatus("Connecting to server " + ws_url);
     ws_conn = new WebSocket(ws_url);
     /* When connected, immediately register with the server */
@@ -224,6 +267,7 @@ function websocketServerConnect() {
         document.getElementById("peer-id").textContent = peer_id;
         ws_conn.send('HELLO ' + peer_id);
         setStatus("Registering with server");
+        setConnectButtonState("Connect");
     });
     ws_conn.addEventListener('error', onServerError);
     ws_conn.addEventListener('message', onServerMessage);
@@ -231,6 +275,7 @@ function websocketServerConnect() {
 }
 
 function onRemoteTrack(event) {
+    console.log("onRemoteTrack called!");
     if (getVideoElement().srcObject !== event.streams[0]) {
         console.log('Incoming stream');
         getVideoElement().srcObject = event.streams[0];
@@ -276,52 +321,6 @@ function onDataChannel(event) {
     receiveChannel.onclose = handleDataChannelClose;
 }
 
-function printStats() {
-
-    getStats(peer_connection, function (result) {
-
-        statsTimer = setTimeout(printStats, 10000);
-        var stats = {};
-    
-        stats.remoteIp = result.connectionType.remote.ipAddress;
-        // 'relayed' means 'TURN', 'peerreflexive' means 'STUN': https://developer.mozilla.org/en-US/docs/Web/API/RTCIceCandidateType#Values
-        stats.candidateType = result.connectionType.remote.candidateType;
-        stats.transportChannel = result.connectionType.transport;
-    
-        // bandwidth download speed (bytes per second)
-        stats.speed = parseInt(result.bandwidth.speed);
-        stats.bandwidth = parseInt(result.bandwidth.googAvailableSendBandwidth);
-    
-        stats.resolutionWidth = parseInt(result.resolutions.recv.width);
-        stats.resolutionHeight = parseInt(result.resolutions.recv.height);
-        // to access native "results" array
-        result.results.forEach(function (item) {
-          // this is the item containing the video-related metrics (usually item 12)
-          if (item.type === 'ssrc' && item.mediaType === 'video') {
-            stats.frameRateDecoded = parseInt(item.googFrameRateDecoded);
-            stats.frameRateReceived = parseInt(item.googFrameRateReceived);
-            stats.frameRateOut = parseInt(item.googFrameRateOutput);
-            stats.packetsLost = parseInt(item.packetsLost);
-            stats.packetsReceived = parseInt(item.packetsReceived);
-            stats.codec = item.googCodecName;
-          }
-        });
-    
-        var now = new Date();
-        stats.ts = [now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()];
-    
-        console.log("Stats - remoteIp: " + stats.remoteIp);
-        console.log("Stats - candidateType: " + stats.candidateType);
-        console.log("Stats - transportChannel: " + stats.transportChannel);
-        console.log("Stats - speed: " + stats.speed);
-        console.log("Stats - bandwidth: " + stats.bandwidth);
-        console.log("Stats - resolutionWidth: " + stats.resolutionWidth);
-        console.log("Stats - resolutionHeight: " + stats.resolutionHeight);
-        console.log("Stats - packetsLost: " + stats.packetsLost);
-        console.log("Stats - packetsReceived: " + stats.packetsReceived);
-      });
-}
-
 function createCall(msg) {
     // Reset connection attempts because we connected successfully
     connect_attempts = 0;
@@ -329,33 +328,47 @@ function createCall(msg) {
     console.log('Creating RTCPeerConnection');
 
     peer_connection = new RTCPeerConnection(rtc_configuration);
-    send_channel = peer_connection.createDataChannel('label', null);
-    send_channel.onopen = handleDataChannelOpen;
-    send_channel.onmessage = handleDataChannelMessageReceived;
-    send_channel.onerror = handleDataChannelError;
-    send_channel.onclose = handleDataChannelClose;
-    peer_connection.ondatachannel = onDataChannel;
-    peer_connection.ontrack = onRemoteTrack;
-    statsTimer = setTimeout(printStats, 10000);
-    /* Send our video/audio to the other peer */
-    /* local_stream_promise = getLocalStream().then((stream) => {
-        console.log('Adding local stream');
-        peer_connection.addStream(stream);
-        return stream;
-    }).catch(setError); */
 
-    if (!msg.sdp) {
+    // send_channel = peer_connection.createDataChannel('label', null);
+    // send_channel.onopen = handleDataChannelOpen;
+    // send_channel.onmessage = handleDataChannelMessageReceived;
+    // send_channel.onerror = handleDataChannelError;
+    // send_channel.onclose = handleDataChannelClose;
+    // peer_connection.ondatachannel = onDataChannel;
+    
+    // we only receive
+    peer_connection.ontrack = onRemoteTrack;
+    
+    
+    //local_stream_promise = getLocalStream().then((stream) => {
+    //    console.log('Adding local stream');
+    //    peer_connection.addStream(stream);
+    //    return stream;
+    //}).catch(setError);
+    
+    // fake just resolved local stream fetching without any streams
+    local_stream_promise = new Promise((resolve, reject) => {
+        resolve();
+    })
+
+    if (msg != null && !msg.sdp) {
         console.log("WARNING: First message wasn't an SDP message!?");
     }
 
     peer_connection.onicecandidate = (event) => {
-        // We have a candidate, send it to the remote party with the same uuid
+        // We have a candidate, send it to the remote party with the
+        // same uuid
         if (event.candidate == null) {
-            console.log("ICE Candidate was null, done");
-           return;
+                console.log("ICE Candidate was null, done");
+                return;
         }
         ws_conn.send(JSON.stringify({'ice': event.candidate}));
     };
 
-    setStatus("Created peer connection for call, waiting for SDP");
+    if (msg != null)
+        setStatus("Created peer connection for call, waiting for SDP");
+
+    setConnectButtonState("Disconnect");
+    return local_stream_promise;
 }
+
