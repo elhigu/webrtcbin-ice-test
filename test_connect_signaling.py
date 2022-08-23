@@ -1,6 +1,8 @@
 import asyncio
 import websockets
- 
+
+# Small test app to just try out how websockets lib works
+
 async def test():
     async with websockets.connect('ws://localhost:8443') as websocket:
         try:

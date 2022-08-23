@@ -16,10 +16,6 @@ var ws_port;
 // Set this to use a specific peer id instead of a random one
 var default_peer_id;
 
-// Override with your own STUN servers if you want
-// var rtc_configuration = {iceServers: [{urls: "stun:172.19.221.117:3478"}]};
-var rtc_configuration = {}; // {iceServers: [{urls: "stun:stun.l.google.com:19302"}]};
-
 // The default constraints that will be attempted. Can be overriden by the user.
 var default_constraints = {video: true, audio: true};
 
@@ -259,7 +255,8 @@ function websocketServerConnect() {
     } else {
         throw new Error ("Don't know how to connect to the signalling server with uri" + window.location);
     }
-    var ws_url = 'ws://' + ws_server + ':' + ws_port
+ 
+    var ws_url = 'ws://' + ws_server + ':' + ws_port;
     setStatus("Connecting to server " + ws_url);
     ws_conn = new WebSocket(ws_url);
     /* When connected, immediately register with the server */
@@ -325,7 +322,7 @@ function createCall(msg) {
     // Reset connection attempts because we connected successfully
     connect_attempts = 0;
 
-    console.log('Creating RTCPeerConnection');
+    console.log('Creating RTCPeerConnection with config:', JSON.stringify(rtc_configuration, null, 2));
 
     peer_connection = new RTCPeerConnection(rtc_configuration);
 
